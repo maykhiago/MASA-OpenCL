@@ -272,7 +272,7 @@ MAKEINFO = makeinfo
 MKDIR_P = /usr/bin/mkdir -p
 NVCC = /usr/local/cuda/bin/nvcc
 #NVCCFLAGS += -Xptxas -dlcm=cg #disable L1 cache
-NVCCFLAGS = -I/usr/local/cuda/include   --gpu-architecture=sm_30   -ftz=true -prec-sqrt=false -prec-div=false \
+NVCCFLAGS = -I/usr/local/cuda/include   --gpu-architecture=sm_75   -ftz=true -prec-sqrt=false -prec-div=false \
 	--compiler-options -fno-strict-aliasing $(COMMONFLAGS)
 OBJEXT = o
 PACKAGE = masa-opencl
