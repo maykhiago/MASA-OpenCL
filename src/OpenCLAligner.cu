@@ -52,13 +52,16 @@
 /**
  * Texture definition for the DNA of sequence#0 (vertical in the DP matrix).
  */
-texture<unsigned char, 1, cudaReadModeElementType> t_seq0;
+//texture<unsigned char, 1, cudaReadModeElementType> t_seq0;
 
 /**
  * Texture definition for the DNA of sequence#1 (horizontal in the DP matrix).
  */
-texture<unsigned char, 1, cudaReadModeElementType> t_seq1;
+//texture<unsigned char, 1, cudaReadModeElementType> t_seq1;
 
+//[NEW] Texture objects replace deprecated texture references
+cudaTextureObject_t t_seq0_obj;
+cudaTextureObject_t t_seq1_obj;
 
 /**
  * Texture definition for the read-only part of the horizontal bus.
@@ -227,6 +230,7 @@ static __device__ int my_max4(int a, int b, int c, int d) {
  * @return ss the 4 bases in the (x,y,z,w) uchar4 vector, representing
  *         the bases (i, i+1, i+2, i+3) of the sequence t_seq0.
  */
+/* 
 static __device__ void fetchSeq0(const int i, uchar4* ss) {
 	if (i >= 0) {
         ss->x = tex1Dfetch(t_seq0,i);
@@ -235,7 +239,17 @@ static __device__ void fetchSeq0(const int i, uchar4* ss) {
         ss->w = tex1Dfetch(t_seq0,i+3);
 	}
 }
+*/
 
+//[NEW]
+static __device__ void fetchSeq0(const int i, uchar4* ss, cudaTextureObject_t texObj) {
+    if (i >= 0) {
+        ss->x = tex1Dfetch<unsigned char>(texObj, i);
+        ss->y = tex1Dfetch<unsigned char>(texObj, i+1);
+        ss->z = tex1Dfetch<unsigned char>(texObj, i+2);
+        ss->w = tex1Dfetch<unsigned char>(texObj, i+3);
+    }
+}
 
 /**
  * This procedure computes the cell (i,j) using the Smith-Waterman recurrence
@@ -408,6 +422,7 @@ __device__ void kernel_check_max4(const int i, const int j,
  * @param[out] s	The j-th dna nucleotide of sequence#1 (horizontal)
  */
 //template <bool USE_TEXTURE_CACHE>
+/*
 __device__ void kernel_load(const int idx, const int bank, const int j, int2* busH, int *h, int *f, unsigned char *s) {
 	*s = tex1Dfetch(t_seq1, j);
     if (idx) {
@@ -422,7 +437,21 @@ __device__ void kernel_load(const int idx, const int bank, const int j, int2* bu
         *f = temp.y; // F-component
     }
 }
-
+*/
+//[NEW] Modified kernel_load to use texture object for seq1
+__device__ void kernel_load(const int idx, const int bank, const int j, 
+	int2* busH, int *h, int *f, 
+	cudaTextureObject_t texSeq1, unsigned char *s) {
+	*s = tex1Dfetch<unsigned char>(texSeq1, j);
+	if (idx) {
+	*h = s_colx[bank][idx];
+	*f = s_coly[bank][idx];
+	} else {
+	int2 temp = busH[j];
+	*h = temp.x;
+	*f = temp.y;
+	}
+}
 
 /**
  * This function writes the values H(i+3,j) and F(i+3,j) of the thread into the
@@ -562,6 +591,7 @@ __device__ void kernel_check_bound(const int i0, const int j0, const int i1, con
  * @param[out] flushColumn_h,flushColumn_e		Stores the last column (when COLUMN_DESTINATION=TO_VECTOR).
  */
 //template<int COLUMN_SOURCE, int COLUMN_DESTINATION, int RECURRENCE_TYPE, int CHECK_LOCATION, bool FLUSH_LAST_ROW>
+/*
 __device__ void process_internal_diagonals_short_phase(
 		const int idx, const int tidx, int i, int j,
 		const int i0, const int j0, const int i1, const int j1,
@@ -583,7 +613,31 @@ __device__ void process_internal_diagonals_short_phase(
 	fetchSeq0(i, &ss);
 
     __syncthreads(); // barrier
+*/
 
+//[NEW] Modified process_internal_diagonals_short_phase
+__device__ void process_internal_diagonals_short_phase(
+	const int idx, const int tidx, int i, int j,
+	const int i0, const int j0, const int i1, const int j1,
+	int2* busH, int2* extraH,
+	int4* busV_h, int4* busV_e, int3* busV_o,
+	int* max, int2* max_pos,
+	int flush_id,
+	const int4* loadColumn_h, const int4* loadColumn_e,
+	int4* flushColumn_h, int4* flushColumn_e,
+	cudaTextureObject_t texSeq0, cudaTextureObject_t texSeq1) 
+{
+	s_colx[0][idx] = s_colx[1][idx] = busV_o[tidx].x;
+	s_coly[0][idx] = s_coly[1][idx] = busV_o[tidx].y;
+
+	int4 left_h = busV_h[tidx];
+	int4 left_e = busV_e[tidx];
+	int  diag_h = busV_o[tidx].z;
+
+	uchar4 ss;
+	fetchSeq0(i, &ss, texSeq0);
+	__syncthreads();
+	//[NEW] Rest of implementation with texture objects...
 
 	/*
 	 *  We need THREADS_COUNT-1 Steps to complete the pending cells.
@@ -670,12 +724,21 @@ __device__ void process_internal_diagonals_short_phase(
  */
 //template <int COLUMN_SOURCE, int COLUMN_DESTINATION, int RECURRENCE_TYPE, bool CHECK_MAX_SCORE>
 //__launch_bounds__(THREADS_COUNT,MIN_BLOCKS_PER_SM)
+/*
 __global__ void kernel_short_phase(const int i0, const int i1,
 				const int step, const int2 cutBlock, int4 *blockResult,
 				int2* busH, int2* extraH,
 				int4* busV_h, int4* busV_e, int3* busV_o,
 				const int4* loadColumn_h, const int4* loadColumn_e,
 				int4* flushColumn_h, int4* flushColumn_e)
+*/
+__global__ void kernel_short_phase(const int i0, const int i1,
+				const int step, const int2 cutBlock, int4 *blockResult,
+				int2* busH, int2* extraH,
+				int4* busV_h, int4* busV_e, int3* busV_o,
+				const int4* loadColumn_h, const int4* loadColumn_e,
+				int4* flushColumn_h, int4* flushColumn_e,
+				cudaTextureObject_t texSeq0, cudaTextureObject_t texSeq1)
 {
     int bx = blockIdx.x;
     int by = step-bx;
@@ -721,9 +784,9 @@ __global__ void kernel_short_phase(const int i0, const int i1,
 
 
 	if (i < i1) {
-		process_internal_diagonals_short_phase(idx, tidx, i, j, i0, j0, i1, j1, busH, extraH, busV_h, busV_e, busV_o, &max, &max_pos, -1, loadColumn_h, loadColumn_e, flushColumn_h, flushColumn_e);
-    }
-
+		//process_internal_diagonals_short_phase(idx, tidx, i, j, i0, j0, i1, j1, busH, extraH, busV_h, busV_e, busV_o, &max, &max_pos, -1, loadColumn_h, loadColumn_e, flushColumn_h, flushColumn_e);
+		process_internal_diagonals_short_phase(idx, tidx, i, j, i0, j0, i1, j1, busH, extraH, busV_h, busV_e, busV_o, &max, &max_pos, -1, loadColumn_h, loadColumn_e, flushColumn_h, flushColumn_e, texSeq0, texSeq1);
+	}
 
 	/* Updates the block result with the block best score */
 
@@ -735,7 +798,6 @@ __global__ void kernel_short_phase(const int i0, const int i1,
 			blockResult[blockIdx.x].z = max;
 		}
 	}
-
 }
 
 /**
@@ -1076,9 +1138,41 @@ static __global__ void kernel_initialize_busH_ungapped(int2* busH, const int j0,
  * @param seq1 sequence 1
  * @param seq1_len sequence 1 length
  */
+/* 
 void bind_textures(const unsigned char* seq0, const int seq0_len, const unsigned char* seq1, const int seq1_len) {
 	cutilSafeCall(cudaBindTexture(0, t_seq0, seq0, seq0_len));
 	cutilSafeCall(cudaBindTexture(0, t_seq1, seq1, seq1_len));
+}
+*/
+//[NEW] Updated texture binding/unbinding functions
+void bind_textures(const unsigned char* seq0, const int seq0_len, 
+	const unsigned char* seq1, const int seq1_len) {
+	cudaResourceDesc resDesc0, resDesc1;
+	memset(&resDesc0, 0, sizeof(resDesc0));
+	memset(&resDesc1, 0, sizeof(resDesc1));
+	resDesc0.resType = resDesc1.resType = cudaResourceTypeLinear;
+
+	// Setup for seq0
+	resDesc0.res.linear.devPtr = const_cast<unsigned char*>(seq0);
+	resDesc0.res.linear.sizeInBytes = seq0_len * sizeof(unsigned char);
+	resDesc0.res.linear.desc = cudaCreateChannelDesc<unsigned char>();
+
+	// Setup for seq1
+	resDesc1.res.linear.devPtr = const_cast<unsigned char*>(seq1);
+	resDesc1.res.linear.sizeInBytes = seq1_len * sizeof(unsigned char);
+	resDesc1.res.linear.desc = cudaCreateChannelDesc<unsigned char>();
+
+	cudaTextureDesc texDesc;
+	memset(&texDesc, 0, sizeof(texDesc));
+	texDesc.readMode = cudaReadModeElementType;
+
+	cutilSafeCall(cudaCreateTextureObject(&t_seq0_obj, &resDesc0, &texDesc, nullptr));
+	cutilSafeCall(cudaCreateTextureObject(&t_seq1_obj, &resDesc1, &texDesc, nullptr));
+	}
+
+	void unbind_textures() {
+	cutilSafeCall(cudaDestroyTextureObject(t_seq0_obj));
+	cutilSafeCall(cudaDestroyTextureObject(t_seq1_obj));
 }
 
 /**
@@ -1156,6 +1250,7 @@ void lauch_external_diagonals(int COLUMN_SOURCE, int COLUMN_DESTINATION, int REC
 		const int i0, const int i1,
 		const int step, const int2 cutBlock, cuda_structures_t* cuda) {
 	//cutilSafeCall(cudaBindTexture(0, t_busH, cuda->d_busH, cuda->busH_size));
+	/*
 	dim3 grid( blocks, 1, 1);
 	if (blocks == 1) {
 		dim3 block( threads, 1, 1);
@@ -1165,6 +1260,16 @@ void lauch_external_diagonals(int COLUMN_SOURCE, int COLUMN_DESTINATION, int REC
 		kernel_long_phase<<< grid, threads, 0>>>(i0, i1, step-1, cutBlock, cuda->d_blockResult, cuda->d_busH, cuda->d_extraH, cuda->d_busV_h, cuda->d_busV_e, cuda->d_busV_o);
 		kernel_short_phase<<< grid, threads, 0>>>(i0, i1, step, cutBlock, cuda->d_blockResult, cuda->d_busH, cuda->d_extraH, cuda->d_busV_h, cuda->d_busV_e, cuda->d_busV_o, cuda->d_loadColumnH, cuda->d_loadColumnE, cuda->d_flushColumnH, cuda->d_flushColumnE);
 	}
+	*/
+	//[NEW]
+	if (blocks == 1) {
+        kernel_single_phase<<<grid, block, 0>>>(i0, i1, step, cutBlock, cuda->d_blockResult, cuda->d_busH, cuda->d_extraH, cuda->d_busV_h, cuda->d_busV_e, cuda->d_busV_o, cuda->d_loadColumnH, cuda->d_loadColumnE, cuda->d_flushColumnH, cuda->d_flushColumnE, t_seq0_obj, t_seq1_obj);
+    } else {
+        kernel_long_phase<<<grid, threads, 0>>>(i0, i1, step-1, cutBlock, cuda->d_blockResult, cuda->d_busH, cuda->d_extraH, cuda->d_busV_h, cuda->d_busV_e, cuda->d_busV_o, t_seq0_obj, t_seq1_obj);
+        kernel_short_phase<<<grid, threads, 0>>>(i0, i1, step, cutBlock, cuda->d_blockResult, cuda->d_busH, cuda->d_extraH, cuda->d_busV_h, cuda->d_busV_e, cuda->d_busV_o, cuda->d_loadColumnH, cuda->d_loadColumnE, cuda->d_flushColumnH, cuda->d_flushColumnE, t_seq0_obj, t_seq1_obj);
+    }
+	//[NEW] Error checking...
+
 	cudaStreamSynchronize(0);
 	cutilCheckMsg("Kernel execution failed");
 	//cutilSafeCall(cudaUnbindTexture(t_busH));
